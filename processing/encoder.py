@@ -1,4 +1,5 @@
 import subprocess
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -36,7 +37,6 @@ class EncoderThread(QThread):
         h, w = self.frames[0].shape[:2]
         w, h = _even(w), _even(h)
 
-        # 9:16 crop centered on the source frame
         crop_w = _even(h * 9 // 16)
         crop_x = _even((w - crop_w) // 2)
 
@@ -87,15 +87,25 @@ class EncoderThread(QThread):
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
 
+        # Drain stderr in a background thread to prevent deadlock:
+        # FFmpeg writes verbose output to stderr; if the OS pipe buffer (~64 KB)
+        # fills up, FFmpeg blocks on write → stops reading stdin → our write blocks.
+        stderr_buf: list[bytes] = []
+        drain = threading.Thread(target=lambda: stderr_buf.append(proc.stderr.read()), daemon=True)
+        drain.start()
+
         total = len(frames)
         span = progress_end - progress_start
-        for i, frame in enumerate(frames):
-            proc.stdin.write(frame.tobytes())
-            self.progress.emit(progress_start + int((i + 1) / total * span))
+        try:
+            for i, frame in enumerate(frames):
+                proc.stdin.write(frame.tobytes())
+                self.progress.emit(progress_start + int((i + 1) / total * span))
+        finally:
+            proc.stdin.close()
 
-        proc.stdin.close()
         proc.wait()
+        drain.join()
 
         if proc.returncode != 0:
-            err = proc.stderr.read().decode(errors="replace")
+            err = b"".join(stderr_buf).decode(errors="replace")
             raise RuntimeError(f"FFmpeg falhou (código {proc.returncode}):\n{err}")
