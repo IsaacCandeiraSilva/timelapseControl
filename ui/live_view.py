@@ -34,7 +34,10 @@ class LiveViewWidget(QLabel):
         )
         self.setPixmap(pixmap)
 
-    def show_error(self, message: str) -> None:
+    def show_message(self, message: str) -> None:
         self.setStyleSheet(_PLACEHOLDER_STYLE)
         self.clear()
         self.setText(message)
+
+    def show_error(self, message: str) -> None:
+        self.show_message(message)
